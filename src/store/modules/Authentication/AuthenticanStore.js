@@ -1,4 +1,4 @@
-import api, { isPasswordExpired } from '@/store/api';
+import api from '@/store/api';
 import Cookies from 'js-cookie';
 import router from '@/router';
 import { roles } from '@/router/routes';
@@ -12,6 +12,7 @@ const AuthenticationStore = {
   state: {
     consoleWindow: null,
     authError: false,
+    ntubAuthenticated: false,
     xsrfCookie: Cookies.get('XSRF-TOKEN'),
     isAuthenticatedCookie: Cookies.get('IsAuthenticated'),
     sessionURI: localStorage.getItem('sessionURI'),
@@ -23,6 +24,7 @@ const AuthenticationStore = {
     consoleWindow: (state) => state.consoleWindow,
     authError: (state) => state.authError,
     isLoggedIn: (state) => {
+      if (state.ntubAuthenticated) return true;
       // We might have gotten XSRF-TOKEN (and HttpOnly SESSION cookie) by Mutual TLS authentication,
       // without going through explicit Session creation
       return (
@@ -35,6 +37,10 @@ const AuthenticationStore = {
     token: (state) => state.xsrfCookie,
   },
   mutations: {
+    ntubLoginSuccess(state) {
+      state.ntubAuthenticated = true;
+      state.authError = false;
+    },
     authSuccess(state, { session, token }) {
       state.authError = false;
       state.xsrfCookie = Cookies.get('XSRF-TOKEN');
@@ -55,6 +61,8 @@ const AuthenticationStore = {
       state.authError = authError;
     },
     logout(state) {
+      state.ntubAuthenticated = false;
+      Cookies.remove('X-Auth-Token');
       Cookies.remove('XSRF-TOKEN');
       Cookies.remove('IsAuthenticated');
       api.set_auth_token(undefined);
@@ -70,36 +78,57 @@ const AuthenticationStore = {
   actions: {
     login({ commit }, { username, password }) {
       commit('authError', false);
-      return api
-        .post('/redfish/v1/SessionService/Sessions', {
-          UserName: username,
-          Password: password,
-        })
-        .then(({ headers, data }) => {
-          commit('authSuccess', {
-            session: headers['location'],
-            token: headers['x-auth-token'],
-          });
-          setSessionPrivilege(commit, data);
-          return isPasswordExpired(data);
+
+      return fetch('/ntub-api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error('Login failed: HTTP ' + response.status);
+          }
+
+          const user = await response.json();
+
+          commit('ntubLoginSuccess');
+          commit('global/setSessionRole', user.role, { root: true });
+
+          return false;
         })
         .catch((error) => {
-          commit('authError');
-          throw new Error(error);
+          commit('authError', true);
+          throw error;
         });
     },
-    logout({ commit, state }) {
-      api
-        .delete(state.sessionURI)
-        .catch(() =>
-          console.log(
-            "Couldn't DELETE Session, proceeding with the logout anyway to get in sync with the backend.",
-          ),
-        )
-        .then(() => commit('logout'))
-        .then(() => commit('virtualMedia/clearDevices', null, { root: true }))
-        .then(() => router.push('/login'))
-        .catch((error) => console.log(error));
+
+    logout({ commit }) {
+      return fetch('/ntub-api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+      })
+        .then((response) => {
+          if (!response.ok && response.status !== 401) {
+            throw new Error('Logout failed: HTTP ' + response.status);
+          }
+
+          commit('logout');
+
+          try {
+            commit('virtualMedia/clearDevices', null, { root: true });
+          } catch (error) {
+            console.warn('Clear virtual media:', error);
+          }
+
+          return router.replace('/login');
+        })
+        .catch((error) => {
+          console.error('NTUB logout error:', error);
+          throw error;
+        });
     },
     getSessionPrivilege({ commit, state }) {
       return api

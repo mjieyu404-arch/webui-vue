@@ -184,6 +184,20 @@ export default defineConfig(({ mode }) => {
         path: '/ws_hmr',
       },
       proxy: {
+        '/ntub-api': {
+          target: 'http://127.0.0.1:18001',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/ntub-api/, '/api'),
+        },
+        '/xyz': {
+          target: env.BASE_URL,
+          changeOrigin: true,
+          secure: false,
+          configure: (proxy) => {
+            proxy.on('proxyReq', injectAuthToken);
+            proxy.on('proxyRes', removeHsts);
+          },
+        },
         '/redfish': {
           target: env.BASE_URL,
           changeOrigin: true,
@@ -213,7 +227,7 @@ export default defineConfig(({ mode }) => {
                   refererUrl.hostname = bmcUrl.hostname;
                   refererUrl.port = bmcUrl.port;
                   proxyReq.setHeader('Referer', refererUrl.toString());
-                } catch (e) {
+                } catch {
                   // If URL parsing fails, leave referer unchanged
                 }
               }

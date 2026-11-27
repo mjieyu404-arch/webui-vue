@@ -1,6 +1,36 @@
 <template>
   <b-container fluid="xl">
     <page-title />
+    <!-- NTUB DASHBOARD START -->
+    <section class="ntub-dashboard" :aria-label="$t('ntubDashboard.title')">
+      <div class="ntub-dashboard__header">
+        <h2>{{ $t('ntubDashboard.title') }}</h2>
+        <span class="ntub-dashboard__badge">
+          {{ $t('ntubMonitor.simulated') }}
+        </span>
+      </div>
+
+      <h3 class="ntub-dashboard__section-title">
+        {{ $t('ntubDashboard.live') }}
+      </h3>
+      <div class="ntub-dashboard__grid">
+        <ntub-cpu-temp-card />
+        <ntub-voltage-card />
+        <ntub-current-card />
+        <ntub-fan-card />
+      </div>
+
+      <h3 class="ntub-dashboard__section-title">
+        {{ $t('ntubDashboard.history') }}
+      </h3>
+      <div class="ntub-dashboard__grid ntub-dashboard__grid--history">
+        <ntub-cpu-temp-history />
+        <ntub-voltage-history />
+        <ntub-current-history />
+        <ntub-fan-history />
+      </div>
+    </section>
+    <!-- NTUB DASHBOARD END -->
     <b-row class="align-items-end">
       <b-col sm="6" md="5" xl="4">
         <search
@@ -106,7 +136,16 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import NtubFanHistory from '@/components/NtubFanHistory.vue';
+import NtubCurrentHistory from '@/components/NtubCurrentHistory.vue';
+import NtubVoltageHistory from '@/components/NtubVoltageHistory.vue';
+import NtubCpuTempHistory from '../../../components/NtubCpuTempHistory.vue';
+
+import NtubCpuTempCard from '@/components/NtubCpuTempCard.vue';
+import NtubVoltageCard from '@/components/NtubVoltageCard.vue';
+import NtubCurrentCard from '@/components/NtubCurrentCard.vue';
+import NtubFanCard from '@/components/NtubFanCard.vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import PageTitle from '@/components/Global/PageTitle';
 import Search from '@/components/Global/Search';
 import StatusIcon from '@/components/Global/StatusIcon';
@@ -136,6 +175,57 @@ const {
 } = useTableSelection();
 
 const { data: sensorsData, isLoading, isFetching } = useSensors();
+
+// NTUB Ubuntu kernel hwmon sensor table
+const ntubTableRows = ref([]);
+let ntubTableTimer = null;
+
+async function refreshNtubTable() {
+  try {
+    const response = await fetch('/ntub-api/sensors/cpu-temp', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status);
+    }
+
+    const sensor = await response.json();
+    const temperature = Number(sensor.temperature);
+
+    if (!Number.isFinite(temperature)) {
+      throw new Error('Invalid CPU_Temp value');
+    }
+
+    ntubTableRows.value = [
+      {
+        name: 'CPU_Temp',
+        status:
+          temperature >= 46 ? 'Critical' : temperature >= 45 ? 'Warning' : 'OK',
+        lowerCritical: null,
+        lowerCaution: null,
+        currentValue: temperature.toFixed(1) + ' °C',
+        upperCaution: '45.0 °C',
+        upperCritical: '46.0 °C',
+      },
+    ];
+  } catch (error) {
+    console.error('NTUB sensor table:', error);
+    ntubTableRows.value = [];
+  }
+}
+
+onMounted(() => {
+  refreshNtubTable();
+  ntubTableTimer = setInterval(refreshNtubTable, 5000);
+});
+
+onBeforeUnmount(() => {
+  if (ntubTableTimer !== null) {
+    clearInterval(ntubTableTimer);
+  }
+});
 
 const searchFilter = ref('');
 const searchTotalFilteredRows = ref(0);
@@ -197,7 +287,10 @@ const tableFilters = [
   },
 ];
 
-const allSensors = computed(() => sensorsData.value || []);
+const allSensors = computed(() => [
+  ...ntubTableRows.value,
+  ...(sensorsData.value || []).filter((sensor) => sensor.name !== 'CPU_Temp'),
+]);
 
 const filteredSensors = computed(() => {
   return getFilteredTableData(allSensors.value, activeFilters.value);
@@ -269,3 +362,91 @@ onBeforeUnmount(() => {
   hideLoader();
 });
 </script>
+
+<style scoped>
+.ntub-dashboard {
+  margin: 0 0 32px;
+}
+
+.ntub-dashboard__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.ntub-dashboard__header h2 {
+  margin: 0;
+  color: #24374c;
+  font-size: 24px;
+  font-weight: 650;
+}
+
+.ntub-dashboard__badge {
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #e5ecf4;
+  color: #43556d;
+  font-size: 13px;
+}
+
+.ntub-dashboard__section-title {
+  margin: 26px 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #315477;
+}
+
+.ntub-dashboard__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: stretch;
+}
+
+.ntub-dashboard__grid > * {
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  margin-bottom: 0;
+}
+
+.ntub-dashboard__grid--history {
+  margin-bottom: 30px;
+}
+
+@media (max-width: 991px) {
+  .ntub-dashboard__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ntub-dashboard__header h2 {
+    font-size: 20px;
+  }
+
+  .ntub-dashboard__grid {
+    gap: 16px;
+  }
+}
+
+/* NTUB_HISTORY_ALIGNMENT_V2 */
+.ntub-dashboard__grid--history > * {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  align-self: stretch;
+}
+
+/* NTUB_HISTORY_HEADER_V3 */
+.ntub-dashboard__grid--history :deep(.history-header) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.ntub-dashboard__grid--history :deep(.history-controls) {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+</style>
